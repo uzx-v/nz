@@ -1,4 +1,3 @@
-
 #!/bin/sh
 
 # =========================
@@ -245,42 +244,22 @@ if [ -n "$ARGO_DOMAIN" ]; then
     log_info "等待隧道建立"
     sleep 5
     
-    # 优先使用环境变量 NZ_CLIENT_SECRET
+    # 优先使用 NZ_CLIENT_SECRET 环境变量，如果没有则从面板配置读取
     if [ -n "$NZ_CLIENT_SECRET" ]; then
         AGENT_SECRET="$NZ_CLIENT_SECRET"
         log_info "使用环境变量 NZ_CLIENT_SECRET"
-    
-    # 从面板配置文件读取 client_secret
-    elif [ -f "/dashboard/data/config.yaml" ]; then
-        AGENT_SECRET=$(grep '^client_secret:' /dashboard/data/config.yaml | awk '{print $2}')
-        if [ -z "$AGENT_SECRET" ]; then
-            # 尝试旧版配置格式
-            AGENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
-        fi
-        log_info "从配置文件读取 client_secret"
-    
-    # 从面板数据库读取（如果需要更精确）
-    elif [ -f "/dashboard/data/sqlite.db" ]; then
-        AGENT_SECRET=$(sqlite3 /dashboard/data/sqlite.db "SELECT secret FROM settings WHERE key='client_secret';" 2>/dev/null)
-        log_info "从数据库读取 client_secret"
-    
     else
-        log_error "无法找到面板配置文件或数据库"
-        AGENT_SECRET=""
+        AGENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
+        log_info "使用面板配置中的 agent_secret_key"
     fi
     
     # 如果备份恢复，NZ_UUID 可能为空，尝试使用环境变量或生成新的
     NZ_UUID=${NZ_UUID:-$(cat /proc/sys/kernel/random/uuid)}
     
     if [ -z "$AGENT_SECRET" ]; then
-        log_error "无法获取探针密钥 (client_secret)，请检查："
-        log_error "1. 是否设置了 NZ_CLIENT_SECRET 环境变量"
-        log_error "2. 面板配置文件 /dashboard/data/config.yaml 是否存在"
-        log_error "3. 配置文件中是否有 client_secret 配置项"
-        log_warn "跳过探针启动"
+        log_error "无法获取 agent_secret_key，请设置 NZ_CLIENT_SECRET 环境变量或确保面板配置正确"
     else
-        # 创建探针配置文件
-        cat > /dashboard/agent_config.yaml <<EOF
+        cat > /dashboard/config.yaml <<EOF
 client_secret: $AGENT_SECRET
 debug: true
 disable_auto_update: true
@@ -302,28 +281,15 @@ use_ipv6_country_code: false
 uuid: $NZ_UUID
 EOF
 
-        log_info "探针配置: server=$ARGO_DOMAIN:443, tls=$NZ_TLS, uuid=$NZ_UUID"
-        log_info "探针密钥长度: ${#AGENT_SECRET} 字符"
+        log_info "探针配置: server=$ARGO_DOMAIN:443, tls=$NZ_TLS, uuid=$NZ_UUID, secret=***${AGENT_SECRET: -4}"
         
-        # 启动探针
-        ./nezha-agent -c /dashboard/agent_config.yaml >/dev/null 2>&1 &
+        ./nezha-agent -c /dashboard/config.yaml >/dev/null 2>&1 &
         sleep 3
         
-        if pgrep -f "nezha-agent.*agent_config.yaml" >/dev/null; then
+        if pgrep -f "nezha-agent.*config.yaml" >/dev/null; then
             log_ok "探针启动成功"
-            log_info "探针进程ID: $(pgrep -f "nezha-agent.*agent_config.yaml")"
         else
-            log_error "探针启动失败，请检查:"
-            log_error "1. 密钥是否正确"
-            log_error "2. 网络连接是否正常"
-            log_error "3. ARGO_DOMAIN 是否正确解析"
-            
-            # 输出错误日志（如果有）
-            if [ -f "nezha-agent.log" ]; then
-                tail -20 nezha-agent.log | while read line; do
-                    log_error "探针日志: $line"
-                done
-            fi
+            log_error "探针启动失败"
         fi
     fi
 else
@@ -424,3 +390,4 @@ while true; do
 
     sleep 60
 done
+
