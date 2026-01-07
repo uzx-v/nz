@@ -81,65 +81,13 @@ echo " 步骤 2: 恢复备份"
 echo "=========================================="
 
 RESTORE_SUCCESS=false
-f [ -f "/restore.sh" ]; then
-    log_info "正在尝试从 GitHub 恢复数据..."
-    /restore.sh
-fi
-
-# ==========================================
-# 步骤 2: 强制注入环境变量 (你的核心需求)
-# ==========================================
-CONFIG_FILE="/dashboard/data/config.yaml"
-
-# 确保目录存在（以防恢复失败或首次启动）
-mkdir -p /dashboard/data
-
-# 如果设置了环境变量 NZ_CLIENT_SECRET，则强制覆盖文件中的值
-if [ -f "/restore.sh" ]; then
-    log_info "正在尝试从 GitHub 恢复数据..."
-    /restore.sh
-fi
-
-# ==========================================
-# 2. 强制写入环境变量中的 NZ_CLIENT_SECRET
-# ==========================================
-CONFIG_FILE="/dashboard/data/config.yaml"
-
-# 确保数据目录存在（防止首次启动且无备份的情况）
-mkdir -p /dashboard/data
-
-if [ -n "$NZ_CLIENT_SECRET" ]; then
-    log_info "检测到环境变量 NZ_CLIENT_SECRET，正在同步至配置..."
-    
-    # 如果配置文件不存在，先创建一个带基础格式的文件
-    if [ ! -f "$CONFIG_FILE" ]; then
-        cat > "$CONFIG_FILE" <<EOF
-Debug: false
-HTTPPort: 8008
-Language: zh-CN
-GRPCPort: 5555
-EOF
-    fi
-
-    # 使用 sed 匹配 ClientSecret: 这一行并强制替换为环境变量的值
-    # 这样可以确保它和你 agent.sh 安装命令里的密钥一致
-    if grep -q "ClientSecret:" "$CONFIG_FILE"; then
-        sed -i "s/ClientSecret:.*/ClientSecret: $NZ_CLIENT_SECRET/" "$CONFIG_FILE"
-    else
-        echo "ClientSecret: $NZ_CLIENT_SECRET" >> "$CONFIG_FILE"
-    fi
-    log_ok "ClientSecret 已更新为: $NZ_CLIENT_SECRET"
+if /restore.sh; then
+    log_ok "备份恢复成功"
+    RESTORE_SUCCESS=true
 else
-    log_warn "未设置 NZ_CLIENT_SECRET 环境变量，将使用备份文件中的值"
+    log_warn "无可用备份，继续启动"
 fi
 
-# 建议同时锁定 NZ_UUID 和 ARGO_DOMAIN，确保面板始终与环境变量一致
-if [ -n "$NZ_UUID" ]; then
-    sed -i "s/NZ_UUID:.*/NZ_UUID: $NZ_UUID/" "$CONFIG_FILE" 2>/dev/null || echo "NZ_UUID: $NZ_UUID" >> "$CONFIG_FILE"
-fi
-if [ -n "$ARGO_DOMAIN" ]; then
-    sed -i "s/GRPCHost:.*/GRPCHost: $ARGO_DOMAIN/" "$CONFIG_FILE" 2>/dev/null || echo "GRPCHost: $ARGO_DOMAIN" >> "$CONFIG_FILE"
-fi
 # =========================
 # 步骤 3: 启动 crond
 # =========================
@@ -297,15 +245,18 @@ if [ -n "$ARGO_DOMAIN" ]; then
     sleep 5
     
     # 从面板配置读取 agent_secret_key
+    if [ -n "$NZ_CLIENT_SECRET" ]; then
+    AGENT_SECRET="$NZ_CLIENT_SECRET"
+    log_info "探针使用环境变量提供的 NZ_CLIENT_SECRET"
+else
     AGENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
-    
-    # 如果备份恢复，NZ_UUID 可能为空，尝试使用环境变量或生成新的
-    NZ_UUID=${NZ_UUID:-$(cat /proc/sys/kernel/random/uuid)}
-    
-    if [ -z "$AGENT_SECRET" ]; then
-        log_error "无法获取 agent_secret_key"
-    else
-        cat > /dashboard/config.yaml <<EOF
+    log_info "从面板配置文件读取密钥"
+fi
+
+if [ -z "$AGENT_SECRET" ]; then
+    log_error "无法获取密钥：环境变量未设置且配置文件不存在"
+else
+    cat > /dashboard/config.yaml <<EOF
 client_secret: $AGENT_SECRET
 debug: true
 disable_auto_update: true
@@ -436,3 +387,4 @@ while true; do
 
     sleep 60
 done
+
