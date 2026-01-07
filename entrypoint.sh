@@ -81,11 +81,48 @@ echo " 步骤 2: 恢复备份"
 echo "=========================================="
 
 RESTORE_SUCCESS=false
-if /restore.sh; then
-    log_ok "备份恢复成功"
-    RESTORE_SUCCESS=true
+f [ -f "/restore.sh" ]; then
+    log_info "正在尝试从 GitHub 恢复数据..."
+    /restore.sh
+fi
+
+# ==========================================
+# 步骤 2: 强制注入环境变量 (你的核心需求)
+# ==========================================
+CONFIG_FILE="/dashboard/data/config.yaml"
+
+# 确保目录存在（以防恢复失败或首次启动）
+mkdir -p /dashboard/data
+
+# 如果设置了环境变量 NZ_CLIENT_SECRET，则强制覆盖文件中的值
+if [ -z "$NZ_CLIENT_SECRET" ]; then
+    log_warn "未检测到环境变量 NZ_CLIENT_SECRET，将维持原有配置或生成随机值"
+    # 如果文件也不存在，则生成一个随机密钥
+    if [ ! -f "$CONFIG_FILE" ]; then
+        NZ_CLIENT_SECRET=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)
+        log_info "生成随机 ClientSecret: $NZ_CLIENT_SECRET"
+    fi
 else
-    log_warn "无可用备份，继续启动"
+    log_info "检测到环境变量 NZ_CLIENT_SECRET，正在强制同步至配置文件..."
+    
+    # 如果文件不存在，先创建一个带基础格式的文件
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "ClientSecret: $NZ_CLIENT_SECRET" > "$CONFIG_FILE"
+    else
+        # 如果文件存在，使用 sed 替换 ClientSecret 的值
+        # 匹配以 ClientSecret: 开头的行并替换全行
+        if grep -q "ClientSecret:" "$CONFIG_FILE"; then
+            sed -i "s/ClientSecret:.*/ClientSecret: $NZ_CLIENT_SECRET/" "$CONFIG_FILE"
+        else
+            echo "ClientSecret: $NZ_CLIENT_SECRET" >> "$CONFIG_FILE"
+        fi
+    fi
+    log_ok "ClientSecret 已强制更新为环境变量中的设置"
+fi
+
+# 建议同时对 NZ_UUID 和 ARGO_DOMAIN 也做相同操作，确保环境变量优先级最高
+if [ -n "$NZ_UUID" ]; then
+    sed -i "s/NZ_UUID:.*/NZ_UUID: $NZ_UUID/" "$CONFIG_FILE" 2>/dev/null || echo "NZ_UUID: $NZ_UUID" >> "$CONFIG_FILE"
 fi
 
 # =========================
