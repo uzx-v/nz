@@ -95,36 +95,51 @@ CONFIG_FILE="/dashboard/data/config.yaml"
 mkdir -p /dashboard/data
 
 # 如果设置了环境变量 NZ_CLIENT_SECRET，则强制覆盖文件中的值
-if [ -z "$NZ_CLIENT_SECRET" ]; then
-    log_warn "未检测到环境变量 NZ_CLIENT_SECRET，将维持原有配置或生成随机值"
-    # 如果文件也不存在，则生成一个随机密钥
-    if [ ! -f "$CONFIG_FILE" ]; then
-        NZ_CLIENT_SECRET=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)
-        log_info "生成随机 ClientSecret: $NZ_CLIENT_SECRET"
-    fi
-else
-    log_info "检测到环境变量 NZ_CLIENT_SECRET，正在强制同步至配置文件..."
-    
-    # 如果文件不存在，先创建一个带基础格式的文件
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "ClientSecret: $NZ_CLIENT_SECRET" > "$CONFIG_FILE"
-    else
-        # 如果文件存在，使用 sed 替换 ClientSecret 的值
-        # 匹配以 ClientSecret: 开头的行并替换全行
-        if grep -q "ClientSecret:" "$CONFIG_FILE"; then
-            sed -i "s/ClientSecret:.*/ClientSecret: $NZ_CLIENT_SECRET/" "$CONFIG_FILE"
-        else
-            echo "ClientSecret: $NZ_CLIENT_SECRET" >> "$CONFIG_FILE"
-        fi
-    fi
-    log_ok "ClientSecret 已强制更新为环境变量中的设置"
+if [ -f "/restore.sh" ]; then
+    log_info "正在尝试从 GitHub 恢复数据..."
+    /restore.sh
 fi
 
-# 建议同时对 NZ_UUID 和 ARGO_DOMAIN 也做相同操作，确保环境变量优先级最高
+# ==========================================
+# 2. 强制写入环境变量中的 NZ_CLIENT_SECRET
+# ==========================================
+CONFIG_FILE="/dashboard/data/config.yaml"
+
+# 确保数据目录存在（防止首次启动且无备份的情况）
+mkdir -p /dashboard/data
+
+if [ -n "$NZ_CLIENT_SECRET" ]; then
+    log_info "检测到环境变量 NZ_CLIENT_SECRET，正在同步至配置..."
+    
+    # 如果配置文件不存在，先创建一个带基础格式的文件
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat > "$CONFIG_FILE" <<EOF
+Debug: false
+HTTPPort: 8008
+Language: zh-CN
+GRPCPort: 5555
+EOF
+    fi
+
+    # 使用 sed 匹配 ClientSecret: 这一行并强制替换为环境变量的值
+    # 这样可以确保它和你 agent.sh 安装命令里的密钥一致
+    if grep -q "ClientSecret:" "$CONFIG_FILE"; then
+        sed -i "s/ClientSecret:.*/ClientSecret: $NZ_CLIENT_SECRET/" "$CONFIG_FILE"
+    else
+        echo "ClientSecret: $NZ_CLIENT_SECRET" >> "$CONFIG_FILE"
+    fi
+    log_ok "ClientSecret 已更新为: $NZ_CLIENT_SECRET"
+else
+    log_warn "未设置 NZ_CLIENT_SECRET 环境变量，将使用备份文件中的值"
+fi
+
+# 建议同时锁定 NZ_UUID 和 ARGO_DOMAIN，确保面板始终与环境变量一致
 if [ -n "$NZ_UUID" ]; then
     sed -i "s/NZ_UUID:.*/NZ_UUID: $NZ_UUID/" "$CONFIG_FILE" 2>/dev/null || echo "NZ_UUID: $NZ_UUID" >> "$CONFIG_FILE"
 fi
-
+if [ -n "$ARGO_DOMAIN" ]; then
+    sed -i "s/GRPCHost:.*/GRPCHost: $ARGO_DOMAIN/" "$CONFIG_FILE" 2>/dev/null || echo "GRPCHost: $ARGO_DOMAIN" >> "$CONFIG_FILE"
+fi
 # =========================
 # 步骤 3: 启动 crond
 # =========================
